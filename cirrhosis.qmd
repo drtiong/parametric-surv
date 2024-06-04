@@ -1,0 +1,232 @@
+---
+title: "Cirrhosis parametric survival model"
+date: "last-modified"
+format: html
+resource_files:
+- cirrhosis.html
+---
+
+# About data
+
+The data provided is sourced from a Mayo Clinic study on primary biliary cirrhosis (PBC) of the liver carried out from 1974 to 1984. The dataset encompasses information on 418 patients followed over a period denoted by N_Days. This timeframe tracks the duration from patient registration until either death, liver transplantation, or the study's conclusion (July 1986). It incorporates the data on patients\' sociodemographic characteristics, medical history, clinical signs, disease severity and outcome. Utilize 17 clinical features for predicting survival state of patients with liver cirrhosis. The survival states include 0 = D (death), 1 = C (censored), 2 = CL (censored due to liver transplantation).
+
+# Data analysis
+
+## Exploratory data analysis
+
+### Load environment
+
+```{r}
+library(flexsurv)
+library(survival)
+library(tidyverse)
+library(gtsummary)
+data1 <- read.csv('cirrhosis.csv')
+
+```
+
+### Data wrangling
+
+rename outcome into time as set as numeric data
+
+```{r}
+data1$time <- data1$N_Days
+data1$time <- as.numeric(data1$time)
+```
+
+set all character as factor
+
+```{r}
+data1[] <- lapply(data1, function(x) {
+if (is.character(x)) {
+factor(x)
+} else {
+x
+}
+})
+```
+
+check data structure
+
+```{r}
+str(data1)
+```
+
+recode event of interest "D" as "1", while "C" and "CL" as "0"
+
+```{r}
+library(dplyr)
+data1 <- data1 %>%
+mutate(status_binary = recode(Status, "D" = 1, "C" = 0, "CL" = 0))
+```
+
+### Describe data
+
+```{r}
+data1 %>%
+select(-ID, -N_Days, -Status) %>%
+tbl_summary(by = status_binary,
+statistic = list(all_continuous() ~ "{mean} ({sd})")) %>%
+add_overall() 
+```
+
+## Fitting the Parametric Survival Model
+
+### Exponential model
+
+```{r}
+surv.mod <- Surv(time = data1$time, event = data1$status_binary == 1)
+exp.mod <- survreg(surv.mod ~ Sex + Bilirubin + Stage + Prothrombin , data = data1, dist='exponential')
+summary(exp.mod)
+tbl_regression(exp.mod)
+```
+
+Interpretation
+
+The exponential model assumes a constant hazard rate over time with the scale parameter fixed at 1.
+
+1.      Sex
+
+o   Males have a survival time 𝑒^−0.5167^=0.596, that is 59.6% of the survival time for females, meaning males have shorter survival times compared to females.
+
+o   The hazard for males is e^0.5167^=1.676, male is 1.676 times higher than for females, indicating a higher risk of the event (death) for males.
+
+2.      Bilirubin
+
+o   For each unit increase in bilirubin, the expected survival time decreases to 89.1% (e^−0.1151^=0.891) of the previous level, indicating shorter survival times with higher bilirubin levels.
+
+o   The hazard increases by 𝑒 ^0.1151^=1.122, 12.2% for each unit increase in bilirubin, indicating a higher risk of death with higher bilirubin levels.
+
+3.      stage
+
+o   Patients in a higher stage have a survival time e^−0.6356^ that is 53% of that of patients in the lower stage, indicating much shorter survival times with advanced disease stages.
+
+o   The hazard is e ^0.6356^=1.888, 1.888 times higher for each unit increase in stage, indicating a significantly higher risk of death with more advanced disease stages.
+
+4.      prothrombin
+
+o   For each unit increase in prothrombin, the survival time decreases to e^−0.2578^=0.772, 77.2% of the previous level, indicating shorter survival times with higher prothrombin levels.
+
+o   The hazard increases by e ^0.2578^=1.294, 29.4% for each unit increase in prothrombin, indicating a higher risk of death with higher prothrombin levels.
+
+### Weibull model
+
+#### Accelerated Failure Time (ATF) model
+
+```{r}
+wei.mod <- survreg(surv.mod ~ Sex + Bilirubin + Stage + Prothrombin, data = data1, dist = 'weibull')
+summary(wei.mod)
+tbl_regression(wei.mod)
+```
+
+Interpretation
+
+1.     Sex
+
+o   Males have a survival time 𝑒^−0.39336^=0.675, that is 67.5% of the survival time for females, meaning males have shorter survival times compared to females.
+
+2.     Bilirubin
+
+o   For each unit increase in bilirubin, the expected survival time decreases to 90.6% (e^−0.09891^=0.906) of the previous level, indicating shorter survival times with higher bilirubin levels.
+
+3.     stage
+
+o   Patients in a higher stage have a survival time e^−0.51456^ that is 59.8% of that of patients in the lower stage, indicating much shorter survival times with advanced disease stages.
+
+4.     prothrombin
+
+o   For each unit increase in prothrombin, the survival time decreases to e^−0.18369^=0.832, 83.2% of the previous level, indicating shorter survival times with higher prothrombin levels.
+
+#### Proportional Hazard  (PH) model
+
+```{r}
+wei.mod.ph <- flexsurvreg(Surv(time, status_binary) ~ Sex + Bilirubin + Stage + Prothrombin, data = data1, dist = 'weibullPH')
+wei.mod.ph
+tbl_regression(wei.mod.ph)
+```
+
+##### Interpretation
+
+1.     Sex
+
+o  The hazard for males is e^0.544^=1.72, male is 1.72 times higher than for females, indicating a higher risk of the event (death) for males.
+
+2.     Bilirubin
+
+o   The hazard increases by 𝑒 ^0.137^=1.15, 15% for each unit increase in bilirubin, indicating a higher risk of death with higher bilirubin levels.
+
+3.     stage
+
+o   The hazard is e ^0.711^=1.888, 2.04 times higher for each unit increase in stage, indicating a significantly higher risk of death with more advanced disease stages.
+
+4.     prothrombin
+
+o   The hazard increases by e ^0.254^=1.29, 29% for each unit increase in prothrombin, indicating a higher risk of death with higher prothrombin levels.
+
+## **Model adequacy for Weibull distribution**
+
+**Weibull regression diagnostic plot by sex**
+
+```{r}
+library(SurvRegCensCov)
+diagnostic_plot <- WeibullDiag(Surv(time = data1$time, event = data1$status_binary == 1) ~ Sex, data = data1)
+
+```
+
+**Weibull regression diagnostic plot by stages of cirrhosis**
+
+```{r}
+diagnostic_plot <- WeibullDiag(Surv(time = data1$time, event = data1$status_binary == 1) ~ Stage, data = data1)
+```
+
+Weibull model is fit, the groups' lines are parallel and linear (not flat).
+
+## Checking the PH assumption
+
+Plot of log-odds of survival against the log of survival time by sex
+
+```{r}
+kmfit <- survfit(surv.mod ~ data1$Sex)
+plot(log(kmfit$time), log(kmfit$surv/(1-kmfit$surv)))
+
+```
+
+Plot of log-odds of survival against the log of survival time by stage of cirrhosis
+
+```{r}
+kmfit1 <- survfit(surv.mod ~ data1$Stage)
+plot(log(kmfit1$time), log(kmfit1$surv/(1-kmfit1$surv)))
+
+```
+
+The plots do not look like a straight lines. It is also not parallel. So it does not support PH assumption. Our **PH asssumption is violated**.
+
+## Plot Survival Probability
+
+```{r}
+weib.cirr <- survreg(Surv(time, status_binary) ~ Bilirubin, data = data1, dist = 'weibull')
+summary(weib.cirr)
+```
+
+Weibull survival curve for a cirrhosis subject with bilirubin of 8mg/dl
+
+```{r}
+pct <- 1:98/100 # The 100th percentile of predicted survival is at +infinity
+ptime <- predict(weib.cirr, newdata=data.frame(Bilirubin = 8) ,
+type = 'quantile', p = pct, se = TRUE)
+matplot(cbind(ptime$fit, ptime$fit + 2*ptime$se.fit,
+ptime$fit - 2*ptime$se.fit)/30.5, 1-pct,
+xlab = "Days", ylab = "Survival", type = 'l', lty = c(1,2,2), col = 1)
+```
+
+# **Prepared By**
+
+1.      Tiong Wen Ning                                               22307078
+
+2.      Hazlienor Binti Mohd Hatta                       22307055
+
+3.      Amalina Binti Asmail \@ Ismail                  22307044
+
+4.      Mohamad Afiq Amsyar Bin Hamedin     23100003
+
+5.      Muhammad Saufi bin Abdullah                22307048
