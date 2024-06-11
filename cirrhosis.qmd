@@ -8,9 +8,9 @@ resource_files:
 
 # About data
 
-The data provided is sourced from a Mayo Clinic study on primary biliary cirrhosis (PBC) of the liver carried out from 1974 to 1984. The dataset encompasses information on 418 patients followed over a period denoted by N_Days. This timeframe tracks the duration from patient registration until either death, liver transplantation, or the study's conclusion (July 1986). It incorporates the data on patients\' sociodemographic characteristics, medical history, clinical signs, disease severity and outcome. Utilize 17 clinical features for predicting survival state of patients with liver cirrhosis. The survival states include 0 = D (death), 1 = C (censored), 2 = CL (censored due to liver transplantation).
+The data provided is sourced from a Mayo Clinic study on the randomised controlled trial for the drug D-penicillamine for primary biliary cirrhosis (PBC) of the liver carried out from 1974 to 1984. 312 patients took part in the study, 112 patients did not join the trial but agreed to record basic metrics and survival tracking but 6 of them soon went untraceable, leaving 102 of them. The dataset encompasses information on 418 patients followed over a period denoted by N_Days. This timeframe tracks the duration from patient registration until either death, liver transplantation, or the study's conclusion (July 1986). It incorporates the data on patients' sociodemographic characteristics, medical history, clinical signs, disease severity and outcome. There was 17 clinical features available for predicting survival state of patients with liver cirrhosis. The survival states include 0 = D (death), 1 = C (censored), 2 = CL (censored due to liver transplantation).
 
-# Data analysis
+# Data Analysis
 
 ## Exploratory data analysis
 
@@ -21,162 +21,265 @@ library(flexsurv)
 library(survival)
 library(tidyverse)
 library(gtsummary)
-data1 <- read.csv('cirrhosis.csv')
+library(survminer)
+data0 <- read.csv('cirrhosis.csv')
 
+```
+
+### Explore Data
+
+```{r}
+summary(data0)
 ```
 
 ### Data wrangling
 
-rename outcome into time as set as numeric data
+set outcome "N_days" as numeric data
 
 ```{r}
-data1$time <- data1$N_Days
-data1$time <- as.numeric(data1$time)
+data1 <- data0 %>%
+  mutate(N_Days = as.numeric(N_Days))
 ```
 
-set all character as factor
+Clean and prepare data
 
 ```{r}
-data1[] <- lapply(data1, function(x) {
-if (is.character(x)) {
-factor(x)
-} else {
-x
-}
-})
+data1 <- data1 %>%
+  mutate(
+    status_binary = recode(Status, "D" = 1, "C" = 0, "CL" = 0),
+    status_binary = factor(status_binary, levels = c(0, 1), labels = c("censored", "death")),
+    Sex = recode(Sex, "F" = "Female", "M" = "Male"),
+    Sex = as.factor(Sex),  # Ensure sex is a factor
+    Bilirubin = as.numeric(Bilirubin),  # Ensure Bilirubin is numeric
+    time = as.numeric(N_Days),  # Use N_days (now numeric) for survival analysis
+    age_years = as.numeric(duration(Age, units = "days") / dyears(1)),  # Convert age in days to age in years using lubridate
+    Stage = as.factor(Stage)  # Ensure Stage is a factor
+  ) %>%
+  mutate(across(where(is.character), ~ recode(., "N" = "No", "Y" = "Yes"))) %>%
+  mutate_if(is.integer, as.numeric) %>%  # Convert all integer columns to numeric
+  mutate_if(is.character, as.factor) %>%  # Convert all character columns to factors
+  filter(!is.na(time), !is.na(Bilirubin), !is.na(Sex), !is.na(age_years), !is.na(Stage))
 ```
-
-check data structure
 
 ```{r}
 str(data1)
 ```
 
-recode event of interest "D" as "1", while "C" and "CL" as "0"
-
 ```{r}
-library(dplyr)
-data1 <- data1 %>%
-mutate(status_binary = recode(Status, "D" = 1, "C" = 0, "CL" = 0))
+summary(data1)
 ```
 
 ### Describe data
 
+overall summary table
+
 ```{r}
-data1 %>%
-select(-ID, -N_Days, -Status) %>%
-tbl_summary(by = status_binary,
-statistic = list(all_continuous() ~ "{mean} ({sd})")) %>%
-add_overall() 
+summary_overall <- data1 %>%
+  select(-ID, -Status, -Age) %>%
+  tbl_summary(
+    by = status_binary,
+    statistic = list(all_continuous() ~ "{mean} ({sd})"),
+     ) %>%
+      add_overall() %>% 
+      add_p()
+summary_overall
+```
+
+## **Kaplan-Meir Survival estimates**
+
+### **Kaplan-Meier estimates for overall**
+
+```{r}
+KM1 <- survfit(Surv(time = data1$time, event = data1$status_binary == "death") ~ 1, 
+               type = "kaplan-meier", data = data1)
+summary(KM1)
+```
+
+Plot the survival probability
+
+```{r}
+ggsurvplot(KM1, data = data1, risk.table = TRUE, linetype = c(1,2), pval = TRUE)
+```
+
+### **Kaplan-Meier estimates for groups**
+
+```{r}
+KM1.g <- survfit(Surv(time = data1$time, event = data1$status_binary == "death") ~ Sex, 
+               type = "kaplan-meier", data = data1)
+summary(KM1.g)
+```
+
+```{r}
+ggsurvplot(KM1.g, data = data1, risk.table = TRUE, 
+           linetype = c(1,2), pval = TRUE)
+```
+
+```{r}
+KM1.stage <- survfit(Surv(time = data1$time, event = data1$status_binary == "death") ~ Stage, 
+               type = "kaplan-meier", data = data1)
+summary(KM1.stage)
+```
+
+```{r}
+ggsurvplot(KM1.stage, data = data1, risk.table = TRUE, 
+           linetype = c(1,2,3,4), pval = TRUE)
+```
+
+comparing Kaplan Meier across groups
+
+```{r}
+survdiff(Surv(time = data1$time, event = data1$status_binary == "death") ~ Sex, 
+         data = data1, 
+         rho = 0)
+
+```
+
+No significant difference in survival estimates between the male and female by log rank test (p=0.08)
+
+```{r}
+survdiff(Surv(time = data1$time, event = data1$status_binary == "death") ~ Stage, 
+         data = data1, 
+         rho = 0)
+
+```
+
+There was a statistically significant difference in survival distributions between the groups of stages .
+
+### Kaplan Meier Cumulative Hazard Function Estimate
+
+```{r}
+ggsurvplot(
+  KM1,
+  fun = "cumhaz",
+  pval.method = TRUE,
+  conf.int = TRUE,
+  ggtheme = theme_light(),
+  title = "Kaplan-Meier Cumulative Hazard Function Estimate"
+)
+```
+
+```{r}
+epiR::epi.insthaz(KM1) %>%
+  ggplot(aes(x = time, y = hest)) + 
+  geom_smooth(color = "red", method = "loess", formula = "y ~ x") +
+  theme_light() +
+  labs(title = "Kaplan-Meier Hazard Function Estimate", 
+       x = "Time", y = "Instantaneous Hazard")
 ```
 
 ## Fitting the Parametric Survival Model
 
+Parametric survival model able to describe the effect of multiple covariates on survival of PCB patient, assuming the survival time follows parametric distribution. Clinically significant covariates such as age, stage of cirrhosis and serum bilirubin are included to predict survival in the following parametric survival models.
+
 ### Exponential model
 
+In the exponential survival model, the hazard is assumed to be constant over time.
+
 ```{r}
-surv.mod <- Surv(time = data1$time, event = data1$status_binary == 1)
-exp.mod <- survreg(surv.mod ~ Sex + Bilirubin + Stage + Prothrombin , data = data1, dist='exponential')
+surv.mod <- Surv(time = data1$time, event = data1$status_binary == "death")
+exp.mod <- survreg(surv.mod ~ age_years + Stage + Bilirubin, data = data1, dist = "exponential")
+```
+
+```{r}
 summary(exp.mod)
+```
+
+```{r}
 tbl_regression(exp.mod)
 ```
 
 Interpretation
 
-The exponential model assumes a constant hazard rate over time with the scale parameter fixed at 1.
+1.      Age
 
-1.      Sex
+-   The estimated log time ratio to die for every increment of 1 year of age is -0.03. The Acceleration Factor (AF) or Time Ratio (TR) is 𝑒^−0.03^=0.972. This indicate with the addition of each year, the time to death is accelerated by a factor of 0.972.
 
-o   Males have a survival time 𝑒^−0.5167^=0.596, that is 59.6% of the survival time for females, meaning males have shorter survival times compared to females.
+-   The estimated hazard ratio (HR) with addition of one year is e^0.03^=1.029, which means the risk of death is significantly higher by 2.9% with the increase of one year of age when adjusted for the stage of cirrhosis and serum bilirubin.
 
-o   The hazard for males is e^0.5167^=1.676, male is 1.676 times higher than for females, indicating a higher risk of the event (death) for males.
+2.      stage
 
-2.      Bilirubin
+-   The estimated log time ratio to die in PCB patient in stage 4 in comparison to stage 1 is -1.878. The Acceleration Factor (AF) or Time Ratio (TR) is 𝑒^−1.878^=0.153, meaning being in Stage 4 accelerates the time to death by a factor of 0.153 compared to Stage 1.
 
-o   For each unit increase in bilirubin, the expected survival time decreases to 89.1% (e^−0.1151^=0.891) of the previous level, indicating shorter survival times with higher bilirubin levels.
+-   The estimated hazard ratio (HR) comparing Stage 4 to Stage 1 is e^1.878^=6.538, which means patient in Stage 4 have 6.5 times higher risk of death compared to those in Stage 1 when adjusted for the age and serum bilirubin.
 
-o   The hazard increases by 𝑒 ^0.1151^=1.122, 12.2% for each unit increase in bilirubin, indicating a higher risk of death with higher bilirubin levels.
+3.      Bilirubin
 
-3.      stage
+-   The estimated log time ratio to die for every increment of 1mg/dl of serum bilirubin is -0.127 The Acceleration Factor (AF) or Time Ratio (TR) is 𝑒^−0.127^=0.881. This indicate with 1mg/dl increase in serum bilirubin, the time to death is accelerated by a factor of 0.881.
 
-o   Patients in a higher stage have a survival time e^−0.6356^ that is 53% of that of patients in the lower stage, indicating much shorter survival times with advanced disease stages.
-
-o   The hazard is e ^0.6356^=1.888, 1.888 times higher for each unit increase in stage, indicating a significantly higher risk of death with more advanced disease stages.
-
-4.      prothrombin
-
-o   For each unit increase in prothrombin, the survival time decreases to e^−0.2578^=0.772, 77.2% of the previous level, indicating shorter survival times with higher prothrombin levels.
-
-o   The hazard increases by e ^0.2578^=1.294, 29.4% for each unit increase in prothrombin, indicating a higher risk of death with higher prothrombin levels.
+-   The estimated hazard ratio (HR) comparing the increase of 1mg/dl of serum bilirubin is e^0.127^=1.135, which means the risk of death is higher by 13.5% with each 1mg/dl increase in serum bilirubin when adjusted for the stage of cirrhosis and age.
 
 ### Weibull model
 
 #### Accelerated Failure Time (ATF) model
 
 ```{r}
-wei.mod <- survreg(surv.mod ~ Sex + Bilirubin + Stage + Prothrombin, data = data1, dist = 'weibull')
-summary(wei.mod)
-tbl_regression(wei.mod)
+wei.mod.aft <- flexsurvreg(surv.mod ~ age_years + Stage + Bilirubin , data = data1, dist = 'weibull')
+wei.mod.aft
+tbl_regression(wei.mod.aft)
 ```
+
+The weibull scale parameter is 0.728 and the shape parameter is 1/0.728 = 1.37.
 
 Interpretation
 
-1.     Sex
+1.      Age
 
-o   Males have a survival time 𝑒^−0.39336^=0.675, that is 67.5% of the survival time for females, meaning males have shorter survival times compared to females.
+-   The estimated log time to death wtih the increase in one year of age was -0.022
 
-2.     Bilirubin
+-   The Acceleration Factor (AF) or Time Ratio (TR) is 𝑒^−0.022^=0.979. This indicate with the addition of each year, the time to death is accelerated by a factor of 0.979. in other words, the older individual has shorter time (by a factor of 0.979) to death when adjusted for the serum bilirubin and stage of cirrhosis.
 
-o   For each unit increase in bilirubin, the expected survival time decreases to 90.6% (e^−0.09891^=0.906) of the previous level, indicating shorter survival times with higher bilirubin levels.
+-   The reduction in survival in PCB patients could range between 1% to 3.3% (adj.TR= 0.979, 95% CI= 0.967, 0.990)
 
-3.     stage
+2.      stage
 
-o   Patients in a higher stage have a survival time e^−0.51456^ that is 59.8% of that of patients in the lower stage, indicating much shorter survival times with advanced disease stages.
+-   The estimated log time to death for PCB patient in stage 4 in comparison to Stage 1 was -1.457.
+-   The Acceleration Factor (AF) or Time Ratio (TR) is 𝑒^−1.457^=0.233, meaning being in Stage 4 accelerates the time to death by a factor of 0.233 compared to Stage 1 when adjusted for the serum bilirubin and age.
+-   The survival in PCB patients shortened between 34.2% to 91.7% (adj.TR= 0.233, 95% CI= 0.083, 0.658)
 
-4.     prothrombin
+3.      Bilirubin
 
-o   For each unit increase in prothrombin, the survival time decreases to e^−0.18369^=0.832, 83.2% of the previous level, indicating shorter survival times with higher prothrombin levels.
+-   The estimated log time to death wtih the increase 1mg/dl of serum bilirubin was -0.105
+-   The Acceleration Factor (AF) or Time Ratio (TR) is 𝑒^−0.105^=0.900. This indicate with 1mg/dl increase in serum bilirubin, the time to death is accelerated by a factor of 0.9. Higher serum bilirubin level are associated with shorter survival time by a factor of 0.9 when adjusted for the stage of cirrhosis and age.
+-   The reduction in survival in PCB patients could range between 8.4% to 11.6% (adj.TR= 0.900, 95% CI= 0.884, 0.916)
 
-#### Proportional Hazard  (PH) model
+#### Proportional Hazard (PH) model
 
 ```{r}
-wei.mod.ph <- flexsurvreg(Surv(time, status_binary) ~ Sex + Bilirubin + Stage + Prothrombin, data = data1, dist = 'weibullPH')
+wei.mod.ph <- flexsurvreg(surv.mod ~ age_years + Stage + Bilirubin, data = data1, dist = "weibullPH")
 wei.mod.ph
 tbl_regression(wei.mod.ph)
 ```
 
-##### Interpretation
+Interpretation
 
-1.     Sex
+1.      Age
 
-o  The hazard for males is e^0.544^=1.72, male is 1.72 times higher than for females, indicating a higher risk of the event (death) for males.
+-   The estimated hazard ratio (HR) with addition of one year is e^0.030^=1.03, which means the risk of death is higher by 3% with the increase of one year of age when adjusted for the serum bilirubin and stage of cirrhosis.
+-   The risk of death in PCB patients could increase by the range between 1% to 5% (adj.TR= 1.03, 95% CI= 1.01, 1.05 )
 
-2.     Bilirubin
+2.      stage
 
-o   The hazard increases by 𝑒 ^0.137^=1.15, 15% for each unit increase in bilirubin, indicating a higher risk of death with higher bilirubin levels.
+-   The estimated hazard ratio (HR) comparing Stage 4 to Stage 1 is e^2.00^=7.40, which means patient in Stage 4 have 7.4 times higher risk of death compared to those in Stage 1 when adjusted for the serum bilirubin and age.
 
-3.     stage
+3.      Bilirubin
 
-o   The hazard is e ^0.711^=1.888, 2.04 times higher for each unit increase in stage, indicating a significantly higher risk of death with more advanced disease stages.
-
-4.     prothrombin
-
-o   The hazard increases by e ^0.254^=1.29, 29% for each unit increase in prothrombin, indicating a higher risk of death with higher prothrombin levels.
+-   The estimated hazard ratio (HR) comparing the increase of 1mg/dl of serum bilirubin is e^0.145^=1.16 which means the risk of death is higher by 16% with each 1mg/dl increase in serum bilirubin when adjusted for the stage of cirrhosis and age.
+-   the risk of death increases ranging 13% to 18% (adj.TR= 1.16, 95% CI= 1.13, 1.18 )
 
 ## **Model adequacy for Weibull distribution**
+
+**Weibull regression diagnostic plot by Stage**
+
+```{r}
+library(SurvRegCensCov)
+diagnostic_plot <- WeibullDiag(Surv(time = data1$time, event = data1$status_binary == "death") ~ Stage, data = data1)
+
+```
 
 **Weibull regression diagnostic plot by sex**
 
 ```{r}
-library(SurvRegCensCov)
-diagnostic_plot <- WeibullDiag(Surv(time = data1$time, event = data1$status_binary == 1) ~ Sex, data = data1)
-
-```
-
-**Weibull regression diagnostic plot by stages of cirrhosis**
-
-```{r}
-diagnostic_plot <- WeibullDiag(Surv(time = data1$time, event = data1$status_binary == 1) ~ Stage, data = data1)
+diagnostic_plot <- WeibullDiag(Surv(time = data1$time, event = data1$status_binary == "death") ~ Sex, data = data1)
 ```
 
 Weibull model is fit, the groups' lines are parallel and linear (not flat).
@@ -186,25 +289,44 @@ Weibull model is fit, the groups' lines are parallel and linear (not flat).
 Plot of log-odds of survival against the log of survival time by sex
 
 ```{r}
-kmfit <- survfit(surv.mod ~ data1$Sex)
+kmfit <- survfit(surv.mod ~ data1$Stage)
 plot(log(kmfit$time), log(kmfit$surv/(1-kmfit$surv)))
 
 ```
 
-Plot of log-odds of survival against the log of survival time by stage of cirrhosis
+Plot of log-odds of survival against the log of survival time by sex
 
 ```{r}
-kmfit1 <- survfit(surv.mod ~ data1$Stage)
+kmfit1 <- survfit(surv.mod ~ data1$Sex)
 plot(log(kmfit1$time), log(kmfit1$surv/(1-kmfit1$surv)))
 
 ```
 
 The plots do not look like a straight lines. It is also not parallel. So it does not support PH assumption. Our **PH asssumption is violated**.
 
+## Comparing models
+
+```{r}
+exp.mod_AIC <- AIC(exp.mod)
+wei.mod.aft_AIC <- wei.mod.aft$AIC
+wei.mod.ph_AIC <- wei.mod.ph$AIC
+```
+
+```{r}
+aic_values <- data.frame(
+  Model = c("Weibull AFT", "Weibull PH", "Exponential"),
+  AIC = c(wei.mod.aft_AIC, wei.mod.ph_AIC, exp.mod_AIC)
+)
+
+print(aic_values)
+```
+
+Weibull model is a better fit model compared to exponential model as it has lower AIC.
+
 ## Plot Survival Probability
 
 ```{r}
-weib.cirr <- survreg(Surv(time, status_binary) ~ Bilirubin, data = data1, dist = 'weibull')
+weib.cirr <- survreg(Surv(time, status_binary == "death") ~ Bilirubin, data = data1, dist = 'weibull')
 summary(weib.cirr)
 ```
 
@@ -221,12 +343,12 @@ xlab = "Days", ylab = "Survival", type = 'l', lty = c(1,2,2), col = 1)
 
 # **Prepared By**
 
-1.      Tiong Wen Ning                                               22307078
+1.      Tiong Wen Ning 22307078
 
-2.      Hazlienor Binti Mohd Hatta                       22307055
+2.      Hazlienor Binti Mohd Hatta 22307055
 
-3.      Amalina Binti Asmail \@ Ismail                  22307044
+3.      Amalina Binti Asmail \@ Ismail   22307044
 
-4.      Mohamad Afiq Amsyar Bin Hamedin     23100003
+4.      Mohamad Afiq Amsyar Bin Hamedin 23100003
 
-5.      Muhammad Saufi bin Abdullah                22307048
+5.      Muhammad Saufi bin Abdullah  22307048
